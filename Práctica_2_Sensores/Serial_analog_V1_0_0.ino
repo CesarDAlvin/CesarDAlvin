@@ -2,7 +2,7 @@
 TEAM PAMBACODE
 ESTE CÓDIGO RECOPILA LA INFORMACION PROPORCIONADA POR DOS SENSORES Y UN POTENCIOMETRO, JUNTO CON UN INDICADOR DE LUZ CON EL
 FIN DE IMPLEMENTAR MANERAS DE REGISTRAR LOS DATOS EN UN ARCHIVO CSV EN OTRO CODIGO EN PYTHON.
-2025/03/09 - V.2.0.0
+2025/03/09 - V.2.0.1
 TRABAJARON: CESAR ARTURO / CesarDAlvin | SARA CRYSTEL / Sara130401 | CERON DAUZON / Juryelcd
  */ 
 
@@ -45,7 +45,8 @@ void loop() {
   float luz = map(luminosidad, 0, 1023, 10, 0); //Mapeo de los valores del sensor a un intervalo de 0 a 10
   //Para el potenciometro
   float tension = analogRead(Poten);  //Tipo de lectura (analogica)
-  float voltaje= map(tension, 0, 1023, 0.0, 5.0); //Mapeo de los valores del sensor a un intervalo de 0 a 5
+  float voltajeSP= map(tension, 0, 1023, 0, 100); //Mapeo de los valores del sensor a un intervalo de 0 a 10
+  float voltaje = 5.0/100.0 * voltajeSP;
 
   // Envio de datos por Serial
   Serial.print("TEMP:"); // Encabezado para identificar el dato
@@ -56,6 +57,7 @@ void loop() {
   Serial.println(luz); // Envía el valor por serial
   Serial.print("VOLT:"); // Encabezado para identificar el dato
   Serial.println(voltaje); // Envía el valor por serial
+
 
   //Condiciones de encendido del led indicador de luminosidad
    if (luz < 5) {
