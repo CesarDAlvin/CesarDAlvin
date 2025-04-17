@@ -1,52 +1,66 @@
 """
-Codigo de la practica 2 ahora ejecutada en una raspberry pi pico W
-en MicroPython
+TEAM PAMBACODE
+
+Este programa recopila información de un sensor DHT11 (temperatura y humedad),
+un potenciómetro y una fotoresistencia. Con estos datos, se controla un LED 
+dependiendo del nivel de luz, y se imprime todo por consola.
+
+Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior.
+
+Fecha: 2025/04/17
+Versión: 1.0.1
+
+Autores:
+- César Arturo / CesarDAlvin
+- Sara Crystel / Sara130401
+- Ceron Dauzon / Juryelcd
 """
+
+# 📦 Importación de librerías necesarias
 import machine
 from machine import Pin, ADC
 import dht
 import time
 
-#Definicion de los pines
-"""
-Dependiendo de la naturaleza de la señal a mandar y si es una entrada o salida se define una sintaxis especifica
-Si es un sensor con caracteristicas distintivas se manda a llamar bajo esta misma
-Si es un sensor de salida se hace uso de la funcion Pin seguido de la posicion asi como su naturaleza si es salida o entrada
-Si es una señal analogica se hace uso de la funcion ADC
-"""
-#Sensores digitales
-led = Pin(18, Pin.OUT) #Led de aviso GP18
-sens_dht= dht.DHT11(Pin(19)) #Sensor con llamada especial debido a su paqueteria GP19
-#Sensores analogicos
-poten = machine.ADC(26) #Potenciómetro en GP26 (ADC0)
-sens_luz = machine.ADC(27) #Fotoresistencia en GP27 (ADC1)
+# 📌 Definición de pines conectados a los sensores y actuadores
 
-#Ciclo de lectura
+# Pines digitales
+led = Pin(18, Pin.OUT)           # LED conectado al pin GP18
+sens_dht = dht.DHT11(Pin(19))    # Sensor DHT11 conectado al pin GP19
+
+# Pines analógicos
+poten = ADC(26)                  # Potenciómetro conectado al pin GP26 (ADC0)
+sens_luz = ADC(27)               # Fotoresistencia conectada al pin GP27 (ADC1)
+
+# 🔁 Bucle principal de lectura y control
 while True:
     try:
-        sens_dht.measure() #Intencion de medir la señal que aporta el sensor DHT11
-        temp = sens_dht.temperature() #Variable de temperatura del DHT11 en Celsius
-        hum = sens_dht.humidity() #Variable de humedad del DHT11 en porcentaje
-        print("Temp:", temp, "°C  Humedad:", hum, "%") #Impresion de las variables temperatura y humedad
+        sens_dht.measure()  # Solicita al DHT11 que realice una medición
+        temp = sens_dht.temperature()  # Obtiene la temperatura en °C
+        hum = sens_dht.humidity()      # Obtiene la humedad relativa en %
+        print("Temp:", temp, "°C  Humedad:", hum, "%")
     except OSError:
-        print("Error leyendo DHT11") #Impresion de texto si ocurra un error al leer al DHT11
-    
-    luz = sens_luz.read_u16()  # Valor de la luz entre 0-65535
-    volt_poten = poten.read_u16() * 3.3 / 65535  # Convertir a voltaje (0-3.3V)
+        print("Error leyendo DHT11")  # Captura error de lectura si el sensor falla
 
-    print("Luz:", luz) #Impresion del estado de Luz
+    # Lectura de valores analógicos
+    luz = sens_luz.read_u16()  # Nivel de luz (0 a 65535)
+    volt_poten = poten.read_u16() * 3.3 / 65535  # Conversión de valor a voltaje (0 - 3.3V)
+
+    print("Luz:", luz)
     print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
-    
-    # Control del LED con la luz (por ejemplo, si está muy oscuro, enciende el LED)
-    if luz < 32765:  # Ajusta este umbral según pruebas reales
-        led.on() #Encendido del LED
+
+    # Control del LED: se enciende si el valor de luz es bajo (ambiente oscuro)
+    if luz < 32765:
+        led.on()
     else:
-        led.off() #Apagado del LED
-    
-    #Impresion del estado del LED
+        led.off()
+
+    # Registro del estado del LED
     est_led = "Encendido" if luz < 32765 else "Apagado"
-    #Segunda prueba de impresion de variables
+
+    # Concatenación de todos los datos en una cadena
     Var = f"{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
     print(Var)
-    
+
+    # Espera de 2 segundos antes de repetir
     time.sleep(2)
