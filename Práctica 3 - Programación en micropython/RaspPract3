@@ -1,0 +1,52 @@
+"""
+Codigo de la practica 2 ahora ejecutada en una raspberry pi pico W
+en MicroPython
+"""
+import machine
+from machine import Pin, ADC
+import dht
+import time
+
+#Definicion de los pines
+"""
+Dependiendo de la naturaleza de la señal a mandar y si es una entrada o salida se define una sintaxis especifica
+Si es un sensor con caracteristicas distintivas se manda a llamar bajo esta misma
+Si es un sensor de salida se hace uso de la funcion Pin seguido de la posicion asi como su naturaleza si es salida o entrada
+Si es una señal analogica se hace uso de la funcion ADC
+"""
+#Sensores digitales
+led = Pin(18, Pin.OUT) #Led de aviso GP18
+sens_dht= dht.DHT11(Pin(19)) #Sensor con llamada especial debido a su paqueteria GP19
+#Sensores analogicos
+poten = machine.ADC(26) #Potenciómetro en GP26 (ADC0)
+sens_luz = machine.ADC(27) #Fotoresistencia en GP27 (ADC1)
+
+#Ciclo de lectura
+while True:
+    try:
+        sens_dht.measure() #Intencion de medir la señal que aporta el sensor DHT11
+        temp = sens_dht.temperature() #Variable de temperatura del DHT11 en Celsius
+        hum = sens_dht.humidity() #Variable de humedad del DHT11 en porcentaje
+        print("Temp:", temp, "°C  Humedad:", hum, "%") #Impresion de las variables temperatura y humedad
+    except OSError:
+        print("Error leyendo DHT11") #Impresion de texto si ocurra un error al leer al DHT11
+    
+    luz = sens_luz.read_u16()  # Valor de la luz entre 0-65535
+    volt_poten = poten.read_u16() * 3.3 / 65535  # Convertir a voltaje (0-3.3V)
+
+    print("Luz:", luz) #Impresion del estado de Luz
+    print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
+    
+    # Control del LED con la luz (por ejemplo, si está muy oscuro, enciende el LED)
+    if luz < 32765:  # Ajusta este umbral según pruebas reales
+        led.on() #Encendido del LED
+    else:
+        led.off() #Apagado del LED
+    
+    #Impresion del estado del LED
+    est_led = "Encendido" if luz < 32765 else "Apagado"
+    #Segunda prueba de impresion de variables
+    Var = f"{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
+    print(Var)
+    
+    time.sleep(2)
