@@ -5,10 +5,10 @@ Este programa recopila información de un sensor DHT11 (temperatura y humedad),
 un potenciómetro y una fotoresistencia. Con estos datos, se controla un LED 
 dependiendo del nivel de luz, y se imprime todo por consola.
 
-Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior.
+Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior, estos se guardan en la Raspberry Pi Pico.
 
 Fecha: 2025/04/17
-Versión: 1.0.1
+Versión: 1.1.0
 
 Autores:
 - César Arturo / CesarDAlvin
@@ -21,6 +21,7 @@ import machine
 from machine import Pin, ADC
 import dht
 import time
+import utime
 
 # 📌 Definición de pines conectados a los sensores y actuadores
 
@@ -32,6 +33,17 @@ sens_dht = dht.DHT11(Pin(19))    # Sensor DHT11 conectado al pin GP19
 poten = ADC(26)                  # Potenciómetro conectado al pin GP26 (ADC0)
 sens_luz = ADC(27)               # Fotoresistencia conectada al pin GP27 (ADC1)
 
+# 📁 Crear/abrir archivo CSV
+# Obtener fecha y hora para nombrar el archivo
+fecha_hora = utime.localtime()
+Datos = "datos_{:04d}-{:02d}-{:02d}_{:02d}-{:02d}-{:02d}.csv".format(
+    fecha_hora[0], fecha_hora[1], fecha_hora[2],
+    fecha_hora[3], fecha_hora[4], fecha_hora[5]
+) #Se crea una tupla y se formatea para agregarlo al nombre del archivo, definiendo la longitud de cada elemento de la tupla
+# Crear el archivo CSV y escribir la cabecera (columnas)
+with open(Datos, "w") as Dat: #Se abre el archivo en modo escritura
+    Dat.write("Tiempo,Temperatura (°C),Humedad (%),Intensidad de Luz,Voltaje (V),Estado LED\n")  # Encabezado CSV solo una vez
+    
 # 🔁 Bucle principal de lectura y control
 while True:
     try:
@@ -50,16 +62,27 @@ while True:
     print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
 
     # Control del LED: se enciende si el valor de luz es bajo (ambiente oscuro)
-    if luz < 32765:
+    if luz < 24000:
         led.on()
     else:
         led.off()
 
     # Registro del estado del LED
-    est_led = "Encendido" if luz < 32765 else "Apagado"
+    est_led = "Encendido" if luz < 24000 else "Apagado"
 
+    # Obtener fecha y hora (formato: YYYY-MM-DD HH:MM:SS)
+    fecha_hora = utime.localtime()
+    timestamp = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}".format(
+        fecha_hora[0], fecha_hora[1], fecha_hora[2],
+        fecha_hora[3], fecha_hora[4], fecha_hora[5]
+    )
+    
     # Concatenación de todos los datos en una cadena
-    Var = f"{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
+    Var = f"{timestamp},{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
+    
+    # Guardar en archivo CSV los datos generados
+    with open(Datos, "a") as Dat:
+        Dat.write(Var + "\n")
     print(Var)
 
     # Espera de 2 segundos antes de repetir
