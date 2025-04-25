@@ -5,10 +5,10 @@ Este programa recopila información de un sensor DHT11 (temperatura y humedad),
 un potenciómetro y una fotoresistencia. Con estos datos, se controla un LED 
 dependiendo del nivel de luz, y se imprime todo por consola.
 
-Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior, estos se guardan en la Raspberry Pi Pico.
+Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior.
 
-Fecha: 2025/04/17
-Versión: 1.1.0
+Fecha: 2025/04/24
+Versión: 1.2.0
 
 Autores:
 - César Arturo / CesarDAlvin
@@ -33,7 +33,7 @@ sens_dht = dht.DHT11(Pin(19))    # Sensor DHT11 conectado al pin GP19
 poten = ADC(26)                  # Potenciómetro conectado al pin GP26 (ADC0)
 sens_luz = ADC(27)               # Fotoresistencia conectada al pin GP27 (ADC1)
 
-# 📁 Crear/abrir archivo CSV
+# 📁 Crear/abrir archivo CSV (modo append para no sobrescribir)
 # Obtener fecha y hora para nombrar el archivo
 fecha_hora = utime.localtime()
 Datos = "datos_{:04d}-{:02d}-{:02d}_{:02d}-{:02d}-{:02d}.csv".format(
@@ -49,8 +49,17 @@ while True:
     try:
         sens_dht.measure()  # Solicita al DHT11 que realice una medición
         temp = sens_dht.temperature()  # Obtiene la temperatura en °C
-        hum = sens_dht.humidity()      # Obtiene la humedad relativa en %
-        print("Temp:", temp, "°C  Humedad:", hum, "%")
+        hum = sens_dht.humidity()      # Obtiene la humedad relativa en %        
+        
+        #Validacion de datos
+        if (-20 <= temp <= 60):
+            temp = "Inválida"
+            print("⚠️ Temperatura fuera de rango:", temp)
+        elif (10 <= hum <= 90):
+            print("⚠️ Humedad fuera de rango:", hum)
+            hum = "Inválida"
+        else:
+            print("Temp:", temp, "°C  Humedad:", hum, "%")
     except OSError:
         print("Error leyendo DHT11")  # Captura error de lectura si el sensor falla
 
@@ -58,8 +67,18 @@ while True:
     luz = sens_luz.read_u16()  # Nivel de luz (0 a 65535)
     volt_poten = poten.read_u16() * 3.3 / 65535  # Conversión de valor a voltaje (0 - 3.3V)
 
-    print("Luz:", luz)
-    print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
+    #Validacion de datos de Fotorresistencia y Potenciometro
+    if luz < 1000 or luz > 65000:
+        print("⚠️ Lectura de luz fuera de rango:", luz)
+        luz = "Inválida"
+    else:
+        print("Luz:", luz)
+    
+    if volt_poten < 0 or volt_poten > 3.3:
+        print("⚠️ Voltaje del potenciómetro fuera de rango:", round(volt_poten, 2))
+        volt_poten = "Inválido"
+    else:
+        print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
 
     # Control del LED: se enciende si el valor de luz es bajo (ambiente oscuro)
     if luz < 24000:
