@@ -9,6 +9,7 @@ Además, se plantea la posibilidad de guardar los datos en archivos para anális
 
 Fecha: 2025/04/24
 Versión: 1.2.0
+Basado en Serial_analog_V1_0_0.py por @alphx76
 
 Autores:
 - César Arturo / CesarDAlvin
@@ -95,7 +96,8 @@ while True:
         fecha_hora[0], fecha_hora[1], fecha_hora[2],
         fecha_hora[3], fecha_hora[4], fecha_hora[5]
     )
-    
+
+    #Formato de datos para archivo .csv
     # Concatenación de todos los datos en una cadena
     Var = f"{timestamp},{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
     
