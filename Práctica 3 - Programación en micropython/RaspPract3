@@ -8,7 +8,7 @@ dependiendo del nivel de luz, y se imprime todo por consola.
 Además, se plantea la posibilidad de guardar los datos en archivos para análisis posterior.
 
 Fecha: 2025/04/24
-Versión: 1.2.0
+Versión: 1.2.1
 Basado en Serial_analog_V1_0_0.py por @alphx76
 
 Autores:
@@ -53,10 +53,10 @@ while True:
         hum = sens_dht.humidity()      # Obtiene la humedad relativa en %        
         
         #Validacion de datos
-        if (-20 <= temp <= 60):
+        if (-20 <= temp >= 60):
             temp = "Inválida"
             print("⚠️ Temperatura fuera de rango:", temp)
-        elif (10 <= hum <= 90):
+        elif (10 <= hum >= 90):
             print("⚠️ Humedad fuera de rango:", hum)
             hum = "Inválida"
         else:
@@ -82,13 +82,13 @@ while True:
         print("Voltaje potenciómetro:", round(volt_poten, 2), "V")
 
     # Control del LED: se enciende si el valor de luz es bajo (ambiente oscuro)
-    if luz < 24000:
+    if luz < 15000:
         led.on()
     else:
         led.off()
 
     # Registro del estado del LED
-    est_led = "Encendido" if luz < 24000 else "Apagado"
+    est_led = "Encendido" if luz < 15000 else "Apagado"
 
     # Obtener fecha y hora (formato: YYYY-MM-DD HH:MM:SS)
     fecha_hora = utime.localtime()
@@ -96,8 +96,8 @@ while True:
         fecha_hora[0], fecha_hora[1], fecha_hora[2],
         fecha_hora[3], fecha_hora[4], fecha_hora[5]
     )
-
-    #Formato de datos para archivo .csv
+    
+    #Formato de los datos a guardar
     # Concatenación de todos los datos en una cadena
     Var = f"{timestamp},{temp},{hum},{luz},{round(volt_poten,2)},{est_led}"
     
