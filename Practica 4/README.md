@@ -1,2 +1,3 @@
-#Práctica 4 - Gráficos con Python
+# Práctica 4 - Gráficos con Python
+
 Este programa importa la informacion de diversos archivos y grafica sus datos
