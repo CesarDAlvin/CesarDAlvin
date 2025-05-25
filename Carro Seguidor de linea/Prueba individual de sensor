@@ -1,0 +1,66 @@
+const int sensorPin   = A0;   // Conecta tu LDR (con divisor) a A0
+const int ledEnable   = 2;    // Pin digital al que va LEDON
+
+bool running = true;          // Estado de medición: true = midiendo, false = parado
+
+void setup() {
+  pinMode(ledEnable, OUTPUT);
+  digitalWrite(ledEnable, LOW);  // Emisores apagados al inicio
+  Serial.begin(9600);
+  delay(2000);                   // Tiempo para que Python abra el puerto serie
+  Serial.println("Envía 'p' para PARAR, 'r' para REANUDAR.");
+}
+
+void loop() {
+  // --- 0) Leer comandos de paro/reanudar ---
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+    if (cmd == 'p' || cmd == 'P') {
+      running = false;
+      Serial.println("=== Mediciones PARADAS ===");
+    }
+    else if (cmd == 'r' || cmd == 'R') {
+      running = true;
+      Serial.println("=== Mediciones REANUDADAS ===");
+    }
+  }
+
+  // Si está parado, salimos rápido y volvemos a checar por comandos
+  if (!running) {
+    delay(100);
+    return;
+  }
+
+  // --- 1) Obtener y formatear tiempo ---
+  unsigned long t        = millis();
+  unsigned long ms       = t % 1000;
+  unsigned long totalSec = t / 1000;
+  unsigned int sec       = totalSec % 60;
+  unsigned int min       = (totalSec / 60) % 60;
+  unsigned int hr        = totalSec / 3600;
+
+  // Imprime HH:MM:SS.mmm
+  if (hr  < 10) Serial.print('0'); Serial.print(hr);
+  Serial.print(':');
+  if (min < 10) Serial.print('0'); Serial.print(min);
+  Serial.print(':');
+  if (sec < 10) Serial.print('0'); Serial.print(sec);
+  Serial.print('.');
+  if (ms < 100) Serial.print('0');
+  if (ms <  10) Serial.print('0');
+  Serial.print(ms);
+  Serial.print('\t');
+
+  // --- 2) Enciendo emisores justo antes de medir ---
+  digitalWrite(ledEnable, HIGH);
+  delayMicroseconds(100);  // Pequeño retardo para estabilizar
+
+  // --- 3) Leer sensor y enviar valor ---
+  int valorADC = analogRead(sensorPin);
+  Serial.println(valorADC);
+
+  // --- 4) Apago emisores ---
+  digitalWrite(ledEnable, LOW);
+
+  delay(50);  // ~20 lecturas por segundo
+}
