@@ -1,0 +1,81 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import glob
+import os
+import sys
+
+def process_color_files(file_paths, color_name):
+    all_values = []
+    ranges = []
+
+    for fp in file_paths:
+        df = pd.read_csv(fp)
+        if 'luminosity' not in df.columns:
+            print(f"ADVERTENCIA: '{fp}' no contiene columna 'luminosity', se omite.")
+            continue
+
+        vals = df['luminosity'].dropna().values
+        all_values.append(vals)
+
+        mn, mx = vals.min(), vals.max()
+        rng = mx - mn
+        ranges.append(rng)
+
+        print(f"Archivo: {os.path.basename(fp)}")
+        print(f"  •  N registros: {len(vals)}")
+        print(f"  •  Min: {mn:.3f}, Max: {mx:.3f}")
+        print(f"  •  Rango: {rng:.3f}\n")
+
+    if not all_values:
+        print("No se procesaron archivos (ninguno con columna 'luminosity').")
+        sys.exit(1)
+
+    all_values = np.concatenate(all_values)
+    global_mean = all_values.mean()
+    avg_range = np.mean(ranges)
+    mn_all, mx_all = all_values.min(), all_values.max()
+    global_range = mx_all - mn_all
+
+    print(f"=== Estadísticas Globales para “{color_name}” ===")
+    print(f"Promedio global: {global_mean:.3f}")
+    print(f"Rango promedio entre archivos: {avg_range:.3f}")
+    print(f"Rango global: {mn_all:.3f} – {mx_all:.3f} = {global_range:.3f}\n")
+
+    plt.figure(figsize=(8,5))
+    plt.hist(all_values, bins=50, edgecolor='black', alpha=0.7)
+    plt.title(f"Distribución de Intensidad — {color_name}")
+    plt.xlabel("Intensity")
+    plt.ylabel("Frecuencia")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    plt.show()
+
+    print("Estos rangos sirven para:")
+    print(f" - Calcular cuántos niveles de gris caben entre los valores mínimo y máximo de “{color_name}”.")
+    print(" - Ver cómo varía la curva de iluminación según la amplitud de medición.")
+
+def main():
+    # Solicita al usuario la ruta de la carpeta y otros parámetros
+    folder = input("Ingresa la ruta de la carpeta con archivos CSV: ").strip() or "."
+    pattern = input("Ingresa el patrón de archivos (por defecto '*.csv'): ").strip() or "*.csv"
+    color = input("Ingresa el nombre descriptivo del color (p. ej. 'Blanco'): ").strip() or "Color"
+
+    if not os.path.isdir(folder):
+        print(f"ERROR: '{folder}' no es una carpeta válida.")
+        sys.exit(1)
+
+    search_pattern = os.path.join(folder, pattern)
+    file_paths = glob.glob(search_pattern)
+
+    if not file_paths:
+        print(f"No se encontraron archivos con patrón '{pattern}' en '{folder}'")
+        print("Contenido de la carpeta:")
+        for f in os.listdir(folder):
+            print("  -", f)
+        sys.exit(1)
+
+    process_color_files(file_paths, color_name=color)
+
+if __name__ == "__main__":
+    main()
