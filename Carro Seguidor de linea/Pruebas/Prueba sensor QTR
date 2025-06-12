@@ -1,21 +1,21 @@
-"""
-TEAM PAMBACODE
-
-Este programa recopila lecturas de un arreglo de 6 sensores analógicos (pins A0–A5)
-controlando emisores (LEDs IR) mediante un pin digital, e incorpora un sensor
-disparador IR para habilitar la lectura solo cuando está activo.
-permite pausar y reanudar las mediciones desde la consola serie ('p' para parar,
-'r' para reanudar), e imprime timestamp, valores de cada sensor y estado IR
-en formato tabulado para su análisis (por ejemplo, desde Python).
-
-Fecha:     2025/06/11
-Versión:   1.0.0
-
-Autores:
-- César Arturo       / CesarDAlvin
-- Sara Crystel       / Sara130401
-- Ceron Dauzon       / Juryelcd
-"""
+/**
+ * TEAM PAMBACODE
+ *
+ * Este programa recopila lecturas de un arreglo de 6 sensores analógicos (pins A0–A5)
+ * controlando emisores (LEDs IR) mediante un pin digital, e incorpora un sensor
+ * disparador IR para habilitar la lectura solo cuando está activo.
+ * permite pausar y reanudar las mediciones desde la consola serie ('p' para parar,
+ * 'r' para reanudar), e imprime timestamp, valores de cada sensor y estado IR
+ * en formato tabulado para su análisis (por ejemplo, desde Python).
+ *
+ * Fecha:     2025/05/28
+ * Versión:   3.0.0
+ *
+ * Autores:
+ * - César Arturo       / CesarDAlvin
+ * - Sara Crystel       / Sara130401
+ * - Ceron Dauzon       / Juryelcd
+ */
 
 #include <Arduino.h>
 
