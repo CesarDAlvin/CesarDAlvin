@@ -2,14 +2,13 @@
  * TEAM PAMBACODE
  *
  * Este programa recopila lecturas de un arreglo de 6 sensores analógicos (pins A0–A5)
- * controlando emisores (LEDs IR) mediante un pin digital, e incorpora un sensor
- * disparador IR para habilitar la lectura solo cuando está activo.
- * permite pausar y reanudar las mediciones desde la consola serie ('p' para parar,
- * 'r' para reanudar), e imprime timestamp, valores de cada sensor y estado IR
- * en formato tabulado para su análisis (por ejemplo, desde Python).
+ * controlando emisores (LEDs IR) mediante un pin digital que actúa como disparador
+ * de la lectura (ledEnable). Permite pausar y reanudar las mediciones vía consola
+ * serie ('p' para parar, 'r' para reanudar), e imprime timestamp y valores de cada
+ * sensor en formato tabulado para su análisis (por ejemplo, desde Python).
  *
  * Fecha:     2025/05/28
- * Versión:   3.0.0
+ * Versión:   3.1.0
  *
  * Autores:
  * - César Arturo       / CesarDAlvin
@@ -17,12 +16,9 @@
  * - Ceron Dauzon       / Juryelcd
  */
 
-
 // ------ Configuración de pines ------
-// LEDs emisores habilitados en digital pin 2
+// Pin digital que habilita los emisores (LEDs IR) y actúa como disparador
 const uint8_t ledEnable  = 2;
-// Sensor IR como disparador de lectura en digital pin 10
-const uint8_t irPin      = 10;
 // Número de sensores analógicos a leer (A0–A5)
 const uint8_t numSensors = 6;
 // Array con los pines analógicos de los sensores
@@ -34,15 +30,14 @@ bool running = true;
 void setup() {
   // Inicializa comunicación serie a 9600 baudios
   Serial.begin(9600);
-  while (!Serial) { ; }  // Espera a que el puerto serie se abra (útil en algunas placas)
+  while (!Serial) { ; }  // Espera a que el puerto serie se abra
 
-  // Configura pines
+  // Configura ledEnable como salida y lo apaga al inicio
   pinMode(ledEnable, OUTPUT);
-  digitalWrite(ledEnable, LOW);    // Emisores apagados al inicio
-  pinMode(irPin, INPUT);           // Sensor IR como entrada digital
+  digitalWrite(ledEnable, LOW);
 
-  // Cabecera con nombre de columnas
-  Serial.println("Tiempo\tS0\tS1\tS2\tS3\tS4\tS5\tIR");
+  // Cabecera con nombre de columnas (sin columna IR)
+  Serial.println("Tiempo\tS0\tS1\tS2\tS3\tS4\tS5");
   Serial.println("Envía 'p' para PARAR, 'r' para REANUDAR.");
 }
 
@@ -87,37 +82,26 @@ void loop() {
   if (ms <  10) Serial.print('0');
   Serial.print(ms);
 
-  // --- 2) Enciendo emisores justo antes de la lectura ---
+  // --- 2) Activar emisores para iluminar los sensores ---
   digitalWrite(ledEnable, HIGH);
   delayMicroseconds(100);  // Retardo breve para estabilizar emisores
 
-  // --- 3) Leer estado del disparador IR ---
-  int irValue = digitalRead(irPin);  // 0 = inactivo, 1 = activo
-
-  // --- 4) Leer sensores analógicos A0–A5 ---
+  // --- 3) Leer sensores analógicos A0–A5 (sin disparador IR) ---
   int readings[numSensors];
-  if (irValue == HIGH) {
-    // Solo si IR está activo
-    for (uint8_t i = 0; i < numSensors; i++) {
-      readings[i] = analogRead(sensorPins[i]);  // Lectura 0–1023
-    }
-  } else {
-    // Si IR inactivo, se asignan ceros
-    for (uint8_t i = 0; i < numSensors; i++) {
-      readings[i] = 0;
-    }
+  for (uint8_t i = 0; i < numSensors; i++) {
+    readings[i] = analogRead(sensorPins[i]);  // Lectura 0–1023
   }
 
-  // --- 5) Imprimir lecturas en consola serie ---
+  // --- 4) Imprimir lecturas en consola serie ---
   Serial.print('\t');
   for (uint8_t i = 0; i < numSensors; i++) {
     Serial.print(readings[i]);
-    Serial.print('\t');
+    if (i < numSensors - 1) Serial.print('\t');
   }
-  Serial.print(irValue);
   Serial.println();
 
-  // --- 6) Apagar emisores y esperar antes de siguiente muestra ---
+  // --- 5) Apagar emisores y esperar antes de siguiente muestra ---
   digitalWrite(ledEnable, LOW);
   delay(50);  // Aproximadamente 20 lecturas por segundo
 }
+
