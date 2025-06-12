@@ -1,0 +1,153 @@
+"""
+TEAM PAMBACODE
+
+Este script conecta a un Arduino vía puerto serie, registra las mediciones de luminosidad
+(en formato CSV con timestamp) y guarda los datos en un archivo CSV. Permite seleccionar
+puerto y carpeta de salida, maneja reconexión automática y asegura el cierre limpio
+de recursos al finalizar.
+
+Fecha:     2025/05/26
+Versión:   1.0.0
+
+Autores:
+- César Arturo       / CesarDAlvin
+- Sara Crystel       / Sara130401
+- Ceron Dauzon       / Juryelcd
+"""
+
+import os
+from datetime import datetime
+import serial
+import serial.tools.list_ports
+
+# Velocidad de transmisión para la comunicación serie
+BAUD_RATE = 9600
+
+
+def listar_puertos():
+    """
+    Lista todos los puertos serie disponibles en el sistema.
+
+    Retorna:
+        list: Lista de objetos comports con atributos 'device' y 'description'.
+    """
+    puertos = list(serial.tools.list_ports.comports())
+    for i, p in enumerate(puertos):
+        print(f"  [{i}] {p.device} – {p.description}")
+    return puertos
+
+
+def elegir_puerto():
+    """
+    Solicita al usuario que seleccione de manera interactiva un puerto serie.
+    Reintenta hasta que se elija un índice válido o se presione ENTER para salir.
+
+    Retorna:
+        str: Nombre del puerto seleccionado (ej. '/dev/ttyUSB0' o 'COM3').
+    """
+    while True:
+        puertos = listar_puertos()
+        if not puertos:
+            print("No se encontró ningún puerto serie. Reconecta tu Arduino e intenta de nuevo.")
+            input("Presiona ENTER para reintentar...")
+            continue
+
+        idx = input("Selecciona el índice del puerto a usar (ENTER para salir): ").strip()
+        if idx == "":
+            print("Saliendo.")
+            exit()
+        if not idx.isdigit() or not (0 <= int(idx) < len(puertos)):
+            print("Índice inválido. Intenta otra vez.")
+            continue
+
+        return puertos[int(idx)].device
+
+
+def new_filename(folder):
+    """
+    Genera un nombre de archivo único basado en timestamp actual.
+
+    Args:
+        folder (str): Carpeta donde se guardará el CSV.
+
+    Returns:
+        str: Ruta completa del nuevo archivo CSV.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return os.path.join(folder, f"medicion_{timestamp}.csv")
+
+
+def main():
+    """
+    Función principal que coordina:
+      1) Selección de carpeta de salida.
+      2) Selección y conexión al puerto serie.
+      3) Lectura continua de líneas desde Arduino.
+      4) Parseo y guardado de datos en CSV.
+      5) Manejo de interrupción manual y cierre de recursos.
+    """
+    # 1) Selección de carpeta de salida
+    out_folder = input(
+        "Ruta de carpeta para guardar CSV (ENTER = actual): "
+    ).strip() or "."
+    os.makedirs(out_folder, exist_ok=True)
+
+    # 2) Selección del puerto serie
+    port = elegir_puerto()
+    print(f"Intentando conectar a {port} @ {BAUD_RATE} baud...")
+
+    # 3) Apertura del puerto serie con reintento en caso de fallo
+    while True:
+        try:
+            ser = serial.Serial(port, BAUD_RATE, timeout=1)
+            break
+        except serial.SerialException as e:
+            print(f"Error abriendo {port}: {e}")
+            print("Por favor selecciona otro puerto.")
+            port = elegir_puerto()
+
+    print(f"Conectado a {port}. Esperando datos…")
+
+    csv_file = None  # Manejador del archivo CSV
+    try:
+        while True:
+            # Leer línea bruta desde el puerto serie
+            raw = ser.readline().decode(errors="ignore").strip()
+            if not raw:
+                continue  # Omitir líneas vacías
+
+            # Si la línea contiene un tabulador, son datos medidos
+            if "\t" in raw:
+                time_str, value = raw.split("\t", 1)
+                csv_line = f"{time_str},{value}\n"
+
+                # Iniciar archivo CSV automáticamente si aún no existe
+                if csv_file is None:
+                    fname = new_filename(out_folder)
+                    csv_file = open(
+                        fname, "w", buffering=1, encoding="utf-8"
+                    )
+                    print(f"→ Archivo iniciado automáticamente: {fname}")
+                    csv_file.write("time,luminosity\n")
+
+                # Escribir línea de datos y mostrar por consola
+                csv_file.write(csv_line)
+                print(csv_line.strip())
+
+            else:
+                # Mensajes informativos enviados por Arduino
+                print(raw)
+
+    except KeyboardInterrupt:
+        # Captura Ctrl+C para cerrar de forma ordenada
+        print("\nDetención manual. Cerrando…")
+
+    finally:
+        # Cierre de recursos: archivo y puerto serie
+        if csv_file:
+            csv_file.close()
+        ser.close()
+
+
+if __name__ == "__main__":
+    main()
