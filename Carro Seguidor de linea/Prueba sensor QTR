@@ -1,0 +1,124 @@
+"""
+TEAM PAMBACODE
+
+Este programa recopila lecturas de un arreglo de 6 sensores analógicos (pins A0–A5)
+controlando emisores (LEDs IR) mediante un pin digital, e incorpora un sensor
+disparador IR para habilitar la lectura solo cuando está activo.
+permite pausar y reanudar las mediciones desde la consola serie ('p' para parar,
+'r' para reanudar), e imprime timestamp, valores de cada sensor y estado IR
+en formato tabulado para su análisis (por ejemplo, desde Python).
+
+Fecha:     2025/06/11
+Versión:   1.0.0
+
+Autores:
+- César Arturo       / CesarDAlvin
+- Sara Crystel       / Sara130401
+- Ceron Dauzon       / Juryelcd
+"""
+
+#include <Arduino.h>
+
+// ------ Configuración de pines ------
+// LEDs emisores habilitados en digital pin 2
+const uint8_t ledEnable  = 2;
+// Sensor IR como disparador de lectura en digital pin 10
+const uint8_t irPin      = 10;
+// Número de sensores analógicos a leer (A0–A5)
+const uint8_t numSensors = 6;
+// Array con los pines analógicos de los sensores
+const uint8_t sensorPins[numSensors] = { A0, A1, A2, A3, A4, A5 };
+
+// Estado de medición: true = midiendo, false = detenido
+bool running = true;
+
+void setup() {
+  // Inicializa comunicación serie a 9600 baudios
+  Serial.begin(9600);
+  while (!Serial) { ; }  // Espera a que el puerto serie se abra (útil en algunas placas)
+
+  // Configura pines
+  pinMode(ledEnable, OUTPUT);
+  digitalWrite(ledEnable, LOW);    // Emisores apagados al inicio
+  pinMode(irPin, INPUT);           // Sensor IR como entrada digital
+
+  // Cabecera con nombre de columnas
+  Serial.println("Tiempo\tS0\tS1\tS2\tS3\tS4\tS5\tIR");
+  Serial.println("Envía 'p' para PARAR, 'r' para REANUDAR.");
+}
+
+void loop() {
+  // --- 0) Leer comandos de paro/reanudar por serie ---
+  if (Serial.available() > 0) {
+    char cmd = Serial.read();
+    if (cmd == 'p' || cmd == 'P') {
+      running = false;
+      Serial.println("=== Mediciones PARADAS ===");
+    }
+    else if (cmd == 'r' || cmd == 'R') {
+      running = true;
+      Serial.println("=== Mediciones REANUDADAS ===");
+    }
+  }
+
+  // Si está detenido, esperamos un poco y volvemos a checar comandos
+  if (!running) {
+    delay(100);
+    return;
+  }
+
+  // --- 1) Obtener y formatear tiempo en HH:MM:SS.mmm ---
+  unsigned long t        = millis();
+  unsigned long ms       = t % 1000;
+  unsigned long totalSec = t / 1000;
+  unsigned int sec       = totalSec % 60;
+  unsigned int min       = (totalSec / 60) % 60;
+  unsigned int hr        = totalSec / 3600;
+
+  if (hr  < 10) Serial.print('0');
+  Serial.print(hr);
+  Serial.print(':');
+  if (min < 10) Serial.print('0');
+  Serial.print(min);
+  Serial.print(':');
+  if (sec < 10) Serial.print('0');
+  Serial.print(sec);
+  Serial.print('.');
+  if (ms < 100) Serial.print('0');
+  if (ms <  10) Serial.print('0');
+  Serial.print(ms);
+
+  // --- 2) Enciendo emisores justo antes de la lectura ---
+  digitalWrite(ledEnable, HIGH);
+  delayMicroseconds(100);  // Retardo breve para estabilizar emisores
+
+  // --- 3) Leer estado del disparador IR ---
+  int irValue = digitalRead(irPin);  // 0 = inactivo, 1 = activo
+
+  // --- 4) Leer sensores analógicos A0–A5 ---
+  int readings[numSensors];
+  if (irValue == HIGH) {
+    // Solo si IR está activo
+    for (uint8_t i = 0; i < numSensors; i++) {
+      readings[i] = analogRead(sensorPins[i]);  // Lectura 0–1023
+    }
+  } else {
+    // Si IR inactivo, se asignan ceros
+    for (uint8_t i = 0; i < numSensors; i++) {
+      readings[i] = 0;
+    }
+  }
+
+  // --- 5) Imprimir lecturas en consola serie ---
+  Serial.print('\t');
+  for (uint8_t i = 0; i < numSensors; i++) {
+    Serial.print(readings[i]);
+    Serial.print('\t');
+  }
+  Serial.print(irValue);
+  Serial.println();
+
+  // --- 6) Apagar emisores y esperar antes de siguiente muestra ---
+  digitalWrite(ledEnable, LOW);
+  delay(50);  // Aproximadamente 20 lecturas por segundo
+}
