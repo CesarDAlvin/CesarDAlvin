@@ -17,7 +17,6 @@
  * - Ceron Dauzon       / Juryelcd
  */
 
-#include <Arduino.h>
 
 // ------ Configuración de pines ------
 // LEDs emisores habilitados en digital pin 2
