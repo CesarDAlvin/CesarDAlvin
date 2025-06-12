@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+TEAM PAMBACODE
+
+Este script procesa archivos CSV generados por el módulo de adquisición y calcula
+diversas métricas estadísticas y rangos (σ-rangos, percentiles, IQR, FWHM, umbral
+de frecuencia) a partir de la columna 'luminosity'. También muestra un histograma
+con las regiones ±1σ y FWHM destacadas.
+
+**Requisitos de los archivos de entrada**:
+- Formato CSV con cabecera.
+- Deben contener al menos una columna llamada `luminosity` con valores numéricos.
+- El patrón de nombres de archivo se define al inicio (p. ej. `Negro_*.csv`).
+
+No modifica el código base porque ya es funcional; solo se han añadido comentarios
+y documentación para facilitar su comprensión y mantenimiento.
+
+Fecha:   2025/05/29
+Versión: 2.0.0
+
+Autores:
+  - César Arturo       / CesarDAlvin
+  - Sara Crystel       / Sara130401
+  - Ceron Dauzon       / Juryelcd
+"""
+
+import pandas as pd       # Para lectura y manipulación de datos tabulares
+import numpy as np        # Para cálculos numéricos y estadísticos
+import matplotlib.pyplot as plt  # Para generación de histogramas
+import glob               # Para búsqueda de ficheros usando patrones
+import os                 # Para verificación de rutas y creación de carpetas
+import sys                # Para manejo de salidas de error y finalización
+
+def compute_additional_ranges(data, bins):
+    """
+    Calcula rangos y métricas estadísticas adicionales sobre un array de datos.
+
+    Parámetros:
+        data: array de numpy con los valores de luminosidad.
+        bins: número de contenedores para el histograma.
+
+    Retorna:
+        mean (float): valor medio de los datos.
+        std (float): desviación estándar de los datos.
+        extras (dict): diccionario con etiquetas y tuplas (mínimo, máximo) para:
+            - ±1σ, ±2σ, ±3σ
+            - Percentiles P5–P95
+            - Rango intercuartílico (IQR)
+            - FWHM (Full Width at Half Maximum)
+            - Umbral de frecuencia mínima (≥1% del tamaño de la muestra)
+    """
+    mean = data.mean()
+    std  = data.std()
+
+    # 1) Rangos basados en múltiplos de σ
+    sigma_ranges = {f"±{k}σ": (mean - k*std, mean + k*std) for k in (1,2,3)}
+
+    # 2) Percentiles 5 y 95
+    p5, p95 = np.percentile(data, [5, 95])
+    percentile_range = ("P5–P95", (p5, p95))
+
+    # 3) Rango intercuartílico Q1–Q3
+    q1, q3 = np.percentile(data, [25, 75])
+    iqr_range = ("IQR (Q1–Q3)", (q1, q3))
+
+    # 4) FWHM: anchura a ½ de la altura máxima del histograma
+    counts, edges = np.histogram(data, bins=bins)
+    half_max = counts.max() / 2.0
+    above = np.where(counts >= half_max)[0]
+    if len(above) > 0:
+        left_edge  = edges[above[0]]
+        right_edge = edges[above[-1] + 1]
+        fwhm_range = ("FWHM", (left_edge, right_edge))
+    else:
+        fwhm_range = ("FWHM", (np.nan, np.nan))
+
+    # 5) Umbral de frecuencia mínima: bins con al menos N muestras (1% de total)
+    N = max(1, int(len(data) * 0.01))
+    thresh = counts >= N
+    if thresh.any():
+        idxs = np.where(thresh)[0]
+        th_left  = edges[idxs[0]]
+        th_right = edges[idxs[-1] + 1]
+        threshold_range = (f"Frecuencia ≥ {N}", (th_left, th_right))
+    else:
+        threshold_range = (f"Frecuencia ≥ {N}", (np.nan, np.nan))
+
+    # Empaquetar todos los rangos en un solo diccionario
+    extras = {
+        **sigma_ranges,
+        percentile_range[0]: percentile_range[1],
+        iqr_range[0]: iqr_range[1],
+        fwhm_range[0]: fwhm_range[1],
+        threshold_range[0]: threshold_range[1],
+    }
+
+    return mean, std, extras
+
+
+def process_color_files(file_paths, color_name, bins=50):
+    """
+    Carga múltiples archivos CSV, extrae y concatena la columna 'luminosity',
+    calcula estadísticas y traza un histograma con los rangos clave marcados.
+
+    Parámetros:
+        file_paths (list[str]): rutas a los archivos CSV a procesar.
+        color_name (str): etiqueta descriptiva para títulos y mensajes.
+        bins (int): número de contenedores del histograma (por defecto 50).
+    """
+    all_vals = []
+    for fp in file_paths:
+        df = pd.read_csv(fp)
+        # Solo consideramos la columna 'luminosity'
+        if 'luminosity' in df.columns:
+            all_vals.append(df['luminosity'].dropna().values)
+
+    # Validación de datos
+    if not all_vals:
+        print("No hay datos de 'luminosity' para procesar.")
+        sys.exit(1)
+
+    data = np.concatenate(all_vals)
+
+    # Estadísticas básicas
+    mn, mx = data.min(), data.max()
+    mean, std, extras = compute_additional_ranges(data, bins)
+
+    # Mostrar resultados en consola
+    print(f"\n=== Estadísticas para “{color_name}” ===")
+    print(f"Min: {mn:.3f}, Max: {mx:.3f}")
+    print(f"Promedio (μ): {mean:.3f}")
+    print(f"Desviación típica (σ): {std:.3f}\n")
+    print("Rangos calculados:")
+    for name, (low, high) in extras.items():
+        print(f" - {name}: {low:.3f} … {high:.3f}")
+    print()
+
+    # Trazar histograma con matplotlib
+    plt.figure(figsize=(8,5))
+    counts, edges, _ = plt.hist(
+        data,
+        bins=bins,
+        edgecolor='black',
+        alpha=0.7
+    )
+    plt.title(f"Distribución de Intensidad — {color_name}")
+    plt.xlabel("luminosity")
+    plt.ylabel("Frecuencia")
+    plt.grid(True, linestyle='--', alpha=0.5)
+
+    # Destacar ±1σ y FWHM en la gráfica
+    for name in ("±1σ", "FWHM"):
+        low, high = extras[name]
+        plt.axvline(low, linestyle='--', label=f"{name} inicio")
+        plt.axvline(high, linestyle='-', label=f"{name} fin")
+
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+
+def main():
+    """
+    Función principal que pide al usuario la carpeta de datos, patrón de nombre
+    y etiqueta de color, verifica la existencia de archivos y lanza el procesamiento.
+    """
+    folder = input("Ingresa la ruta de la carpeta con archivos CSV: ").strip() or "."
+    pattern = input("Patrón de archivos (ej. Negro_*.csv): ").strip() or "*.csv"
+    color = input("Nombre descriptivo del color: ").strip() or "Color"
+
+    # Verificar que la carpeta existe
+    if not os.path.isdir(folder):
+        print(f"ERROR: '{folder}' no es una carpeta válida.")
+        sys.exit(1)
+
+    # Encontrar archivos que coincidan con el patrón
+    paths = glob.glob(os.path.join(folder, pattern))
+    if not paths:
+        print("No se encontraron archivos con ese patrón.")
+        sys.exit(1)
+
+    # Procesar los archivos encontrados
+    process_color_files(paths, color_name=color)
+
+
+if __name__ == "__main__":
+    main()
