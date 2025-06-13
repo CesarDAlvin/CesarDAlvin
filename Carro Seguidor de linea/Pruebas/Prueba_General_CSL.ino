@@ -7,8 +7,8 @@
  *
  * Comunicación y configuración por comandos serie.
  *
- * Fecha:     2025/06/11
- * Versión:   1.1.5 – Código optimizado y mejor documentado
+ * Fecha:     2025/06/13
+ * Versión:   1.1.3 – Código optimizado y mejor documentado
  *
  * Autores:
  *  - César Arturo       / CesarDAlvin
