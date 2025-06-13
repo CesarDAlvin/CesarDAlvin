@@ -1,482 +1,508 @@
 /**
  * TEAM PAMBACODE
  *
- * Programa multifunción: seguimiento de línea con sensores QTR y pruebas de motor
- * usando driver TB6612FNG.  
- * Modos:
- *   - Seguidor de línea (calibración por LDR, PID, detección de curvas y cinemática).
- *   - Pruebas de motores A/B (control manual, display de datos, rampas).
- * Selección de modo y configuración vía comandos serie.  
+ * Programa multifunción: 
+ *  - Seguidor de línea con sensores QTR y control PID, detección de curvas y modelo cinemático.
+ *  - Pruebas de motores A/B con driver TB6612FNG: control manual, display de datos y rampas.
+ *
+ * Comunicación y configuración por comandos serie.
  *
  * Fecha:     2025/06/11
- * Versión:   1.0.0
+ * Versión:   1.1.5 – Código optimizado y mejor documentado
  *
  * Autores:
- * - César Arturo       / CesarDAlvin
- * - Sara Crystel       / Sara130401
- * - Ceron Dauzon       / Juryelcd
+ *  - César Arturo       / CesarDAlvin
+ *  - Sara Crystel       / Sara130401
+ *  - Ceron Dauzon       / Juryelcd
  */
 
 #include <Arduino.h>
 
-// ====== CONFIGURACIÓN DE PINS ======
-// Pines analógicos de sensores QTR para línea
-const int sensorPins[6] = { A0, A1, A2, A3, A4, A5 };
-// Pin que habilita LEDs IR
-const int ledEnable     = 2;
-// LDR digital para disparar calibración de línea
-const int LDRPin        = 10;
+// ======= PINES =======
+static constexpr int SENSOR_PINS[6] = { A0, A1, A2, A3, A4, A5 };
+static constexpr int LED_ENABLE     = 2;
+static constexpr int LDR_PIN        = 10;
 
-// Pines de control del driver TB6612FNG para motores A y B
-const int PIN_AIN1 = 5, PIN_AIN2 = 4, PIN_PWMA = 3;
-const int PIN_BIN1 = 7, PIN_BIN2 = 8, PIN_PWMB = 9;
-const int PIN_STBY = 6;
+static constexpr int PIN_AIN1 = 5, PIN_AIN2 = 4, PIN_PWMA = 3;
+static constexpr int PIN_BIN1 = 7, PIN_BIN2 = 8, PIN_PWMB = 9;
+static constexpr int PIN_STBY = 6;
 
-// ====== PARÁMETROS DE HISTERESIS ======
-// Umbrales para filtro de cambio de estado en sensores analógicos
-const int THRESH_HIGH = 850;
-const int THRESH_LOW  = 700;
+// ======= PARÁMETROS =======
+static constexpr int   THRESH_HIGH   = 850;
+static constexpr int   THRESH_LOW    = 700;
+static constexpr float POS_MM[6]     = { +20, +12, +4, -4, -12, -20 };
+static constexpr float K_P           = 10.0f;
+static constexpr float K_I           = 1.0f;
+static constexpr float K_D           = 0.30f;
+static constexpr float MOTOR_TORQUE  = 0.0817f;
+static constexpr int   MOTOR_MAX_RPM = 2500;
+static constexpr float GEAR_RATIO    = 10.0f;
+static constexpr float WHEEL_RADIUS  = 0.02f;
+static constexpr float AXLE_DISTANCE = 0.15f;
+static constexpr int   PWM_MIN       = 200;
+static constexpr int   PWM_BASE      = 400;
+static constexpr int   PWM_MAX       = 1010;
 
-// ====== POSICIÓN DE CADA SENSOR (mm) ======
-// Coordenadas laterales de cada sensor QTR respecto al centro del robot
-const float posMM[6] = { +20, +12, +4, -4, -12, -20 };
+// ======= ENUMERACIONES =======
+enum class MainMode   { Unselected, LineFollower, MotorTest };
+enum class UIState    { SelectMain, MenuLine, MenuMotor, Manual, Display, Ramp, SelectMotor };
+enum class VehicleSt  { Straight, Curve };
+enum class MotorSel   { A, B, Both };
+enum class RampState  { Stop, Ramp };
 
-// ====== PARÁMETROS PID ======
-// Ganancias proporcional, integral y derivativa [PWM/mm], [PWM·s/mm], [PWM·s/mm]
-const float Kp = 10.0;
-const float Ki = 1.0;
-const float Kd = 0.30;
+// ======= VARIABLES GLOBALES =======
+// Modo y estado
+MainMode  mainMode    = MainMode::Unselected;
+UIState   uiState     = UIState::SelectMain;
 
-// ====== PARÁMETROS FÍSICOS ======
-const float Tmax          = 0.009807;  // Torque motor máximo (Nm)
-const int   MOTOR_MAX_RPM = 2500;      // RPM sin carga
-const float GEAR_RATIO    = 10.0;      // Relación de reducción
-const float MOTOR_RADIUS  = 0.02;      // Radio de rueda (m)
-const float L             = 0.15;      // Distancia entre ejes (m)
+// Line follower
+bool        calibrating       = true;
+bool        runningLineFollow = false;
+bool        detected[6]       = { false };
+float       lastRawPosition   = 0.0f;
+float       prevError         = 0.0f;
+float       integralSum       = 0.0f;
+float       setpoint          = 0.0f;
+unsigned long lastSampleTime  = 0;
 
-// ====== LÍMITES PWM ======
-const int PWM_MIN  = 200;   // Mínimo PWM efectivo
-const int PWM_BASE = 400;   // PWM de crucero
-const int PWM_MAX  = 1010;  // Máximo PWM permitido
+// Cinemática y curvas
+bool        inCurve           = false;
+unsigned long curveStartTime  = 0;
+float       curveDistance     = 0.0f;
+float       curveAngle        = 0.0f;
+float       straightDist      = 0.0f;
+float       curveTotalDist    = 0.0f;
+float       totalDist         = 0.0f;
+VehicleSt   vehicleState      = VehicleSt::Straight;
 
-// ====== MENÚ PRINCIPAL ======
-// Modos generales: línea o motor
-enum MainMode { MODE_UNSELECTED, MODE_LINE, MODE_MOTOR };
-MainMode mainMode = MODE_UNSELECTED;
+// Cinemática instantánea y previas
+float prev_vL    = 0.0f, prev_vR    = 0.0f, prev_vCar = 0.0f;
+float distL      = 0.0f, distR      = 0.0f, vCar      = 0.0f, aCar = 0.0f;
 
-// ====== ESTADOS DE INTERFAZ ======
-enum UIState {
-  U_SELECT_MAIN,  // Selección inicial
-  // Línea
-  U_MENU_LINE,
-  // Motores
-  U_MENU_MOTOR,
-  U_MANUAL,
-  U_DISPLAY,
-  U_RAMP,
-  U_SELECT_MOTOR
-};
-UIState uiState = U_SELECT_MAIN;
+// Parámetros de muestreo
+unsigned int samplingInterval = 1000;
 
-// ====== VARIABLES SEGUIDOR DE LÍNEA ======
-bool   calibrating      = true;       // Flag de calibración LDR
-bool   runningLF        = false;      // Ejecución de seguimiento
-bool   detected[6]      = {0};        // Estados digitales filtrados
-float  lastRawPosition  = 0;          // Última posición bruta
-float  prevError        = 0;          // Error anterior
-float  integral         = 0;          // Integral acumulada
-float  setpoint         = 0;          // Posición objetivo
-unsigned long lastTime  = 0;          // Timestamp última muestra
-bool   inCurve          = false;      // Flag curva
-unsigned long curveStart= 0;          // Inicio de curva
-float  curveDist        = 0, curveAng = 0; // Distancia y ángulo de curva
-float  prev_vL = 0, prev_vR = 0, prev_vCar = 0; // Velocidades previas
-float  distL = 0, distR = 0, vCar = 0, aCar = 0; // Cinemática
-unsigned int samplingInterval = 1000; // Intervalo muestreo (ms)
+// Últimos valores PID
+float lastErr  = 0.0f;
+float lastP    = 0.0f;
+float lastI    = 0.0f;
+float lastD    = 0.0f;
+float lastCorr = 0.0f;
 
-// ====== VARIABLES MODO MOTOR ======
-enum OpState { OP_STOP, OP_RAMP };
-OpState opA = OP_STOP, opB = OP_STOP; // Estado rampa de A y B
-enum MotorSel { MS_A, MS_B, MS_BOTH };
-MotorSel motorSel = MS_A;             // Motor(s) seleccionados
-// Parámetros rampa A
-int pwmA = 0, r0A = 0, r1A = 0, secsA = 0;
+// Pruebas de motor
+RampState opA = RampState::Stop, opB = RampState::Stop;
+MotorSel  motorSel = MotorSel::A;
+
+// Rampa A
+int         pwmA       = 0, r0A = 0, r1A = 0, secsA = 0;
+bool        holdPhaseA = false;
 unsigned long rampStartA = 0;
-bool holdPhaseA = false;
-unsigned long lastDispA = 0;
-float lastVelA = 0, distA_m = 0;
-// Parámetros rampa B
-int pwmB = 0, r0B = 0, r1B = 0, secsB = 0;
-unsigned long rampStartB = 0;
-bool holdPhaseB = false;
-unsigned long lastDispB = 0;
-float lastVelB = 0, distB_m = 0;
 
-// ====== PROTOTIPOS DE FUNCIONES ======
+// Rampa B
+int         pwmB       = 0, r0B = 0, r1B = 0, secsB = 0;
+bool        holdPhaseB = false;
+unsigned long rampStartB = 0;
+
+// Display motores
+unsigned long lastDispA = 0, lastDispB = 0;
+float          lastVelA = 0.0f, lastVelB = 0.0f;
+float          distA_m  = 0.0f, distB_m  = 0.0f;
+
+// ======= PROTOTIPOS =======
 void showSelectMain();
 void showMenuLine();
 float calibrateSetpoint();
 String readLine();
-int readInt(const char* prompt, int minV, int maxV);
 void printMenuMotor();
-void applyPWM_A(int p);
-void applyPWM_B(int p);
-void updateRampA();
-void updateRampB();
+void applyPWM(int pwm, int pinIn1, int pinIn2, int pinPw);
+void updateRamp(RampState &state, unsigned long &startTime,
+                bool &hold, int r0, int r1, int secs,
+                int pinIn1, int pinIn2, int pinPw);
 void doDisplayA();
 void doDisplayB();
+void displayKinematics();
 
+// ======= SETUP =======
 void setup() {
   Serial.begin(9600);
-  delay(2000);  // Tiempo para iniciar monitor serie
+  delay(2000);
 
-  // Configuración de pines QTR y LDR
-  pinMode(ledEnable, OUTPUT);
-  pinMode(LDRPin, INPUT);
-  digitalWrite(ledEnable, LOW);
+  // Sensores QTR
+  pinMode(LED_ENABLE, OUTPUT);
+  pinMode(LDR_PIN, INPUT);
+  digitalWrite(LED_ENABLE, LOW);
 
-  // Configuración de pines del driver de motor
-  pinMode(PIN_AIN1, OUTPUT);
-  pinMode(PIN_AIN2, OUTPUT);
-  pinMode(PIN_PWMA, OUTPUT);
-  pinMode(PIN_BIN1, OUTPUT);
-  pinMode(PIN_BIN2, OUTPUT);
-  pinMode(PIN_PWMB, OUTPUT);
-  pinMode(PIN_STBY, OUTPUT);
-  digitalWrite(PIN_STBY, HIGH);  // Sacar de standby
+  // Driver TB6612FNG: motores A, B y STBY
+  const int motorPins[] = {
+    PIN_AIN1, PIN_AIN2, PIN_PWMA,
+    PIN_BIN1, PIN_BIN2, PIN_PWMB,
+    PIN_STBY
+  };
+  for (size_t i = 0; i < sizeof(motorPins)/sizeof(motorPins[0]); ++i) {
+    pinMode(motorPins[i], OUTPUT);
+  }
 
-  // Mostrar menú de selección principal
   showSelectMain();
 }
 
+// ======= LOOP =======
 void loop() {
-  // — Selección de modo principal (línea o motor) —
-  if (uiState == U_SELECT_MAIN) {
+  // —— Selección de modo principal ——
+  if (uiState == UIState::SelectMain) {
     if (Serial.available()) {
       char c = Serial.read();
       if (c == '1') {
-        // Iniciar modo seguidor de línea
-        mainMode = MODE_LINE;
-        uiState   = U_MENU_LINE;
-        setpoint = calibrateSetpoint();
-        Serial.print("Setpoint inicial: "); Serial.print(setpoint, 2); Serial.println(" mm");
+        mainMode = MainMode::LineFollower;
+        uiState   = UIState::MenuLine;
+        setpoint  = calibrateSetpoint();
+        Serial.print("Setpoint inicial: "); Serial.print(setpoint,2); Serial.println(" mm");
         Serial.println("Esperando señal LDR para iniciar seguimiento...");
         showMenuLine();
-        lastTime = millis();
+        lastSampleTime = millis();
       }
       else if (c == '2') {
-        // Iniciar modo pruebas de motor
-        mainMode = MODE_MOTOR;
-        uiState   = U_MENU_MOTOR;
+        mainMode = MainMode::MotorTest;
+        uiState   = UIState::MenuMotor;
         printMenuMotor();
       }
     }
     return;
   }
 
-  // — MODO SEGUIDOR DE LÍNEA —
-  if (mainMode == MODE_LINE) {
-    // *** 1) Calibración vía LDR digital ***
+  // ===== SEGUIDOR DE LÍNEA =====
+  if (mainMode == MainMode::LineFollower) {
+    // 1) Calibración LDR
     if (calibrating) {
-      int ldrState = digitalRead(LDRPin);
-      Serial.print("LDR estado = ");
-      Serial.println(ldrState == HIGH ? "HIGH (luz)" : "LOW (oscuro)");
-      if (ldrState == HIGH) {
+      int ldr = digitalRead(LDR_PIN);
+      Serial.print("LDR estado = "); Serial.println(ldr==HIGH?"HIGH (luz)":"LOW (oscuro)");
+      if (ldr == HIGH) {
         calibrating = false;
         Serial.println("Señal LDR detectada: iniciando seguimiento");
         Serial.println("GOOOO!");
       } else {
         setpoint = calibrateSetpoint();
-        Serial.print("Recalibrando setpoint: "); Serial.print(setpoint, 2); Serial.println(" mm");
+        Serial.print("Recalibrando setpoint: "); Serial.print(setpoint,2); Serial.println(" mm");
       }
       delay(100);
       return;
     }
 
-    // *** 2) Menú de línea por serie ***
-    if (Serial.available() && uiState == U_MENU_LINE) {
+    // 2) Menú Línea
+    if (Serial.available() && uiState == UIState::MenuLine) {
       char c = Serial.read();
-      if      (c == '1') { runningLF = true;  Serial.println("=== LECTURA INICIADA ==="); }
-      else if (c == '2') { runningLF = false; Serial.println("=== LECTURA DETENIDA ==="); }
-      else if (c == '3') {
-        // Cambiar intervalo de muestreo
-        Serial.println("Ingrese intervalo muestreo (0–3000 ms) y ENTER, o 'm' para volver:");
-        while (1) {
+      if (c=='1') {
+        runningLineFollow = true; Serial.println("=== LECTURA INICIADA ===");
+      }
+      else if (c=='2') {
+        runningLineFollow = false;
+        applyPWM(0, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+        applyPWM(0, PIN_BIN1, PIN_BIN2, PIN_PWMB);
+        Serial.println("=== LECTURA DETENIDA – MOTORES APAGADOS ===");
+      }
+      else if (c=='3') {
+        Serial.println("Ingrese intervalo muestreo (0–3000 ms) o 'm' para cancelar:");
+        while (true) {
           if (!Serial.available()) continue;
-          String line = Serial.readStringUntil('\n');
-          line.trim();
+          String line = readLine();
+          if (line.length() == 0) {
+            Serial.println("No ingresaste nada. Ingresa un número o 'm':");
+            continue;
+          }
           if (line.equalsIgnoreCase("m")) {
-            Serial.println("Cancelado.");
-            showMenuLine();
+            Serial.println("Cambio de intervalo cancelado.");
             break;
           }
-          bool num = line.length() > 0;
-          for (char ch : line) if (!isDigit(ch)) { num = false; break; }
-          if (num) {
-            unsigned long v = line.toInt();
-            if (v <= 3000) {
-              samplingInterval = v;
-              Serial.print("Intervalo actualizado: "); Serial.print(v); Serial.println(" ms");
-              break;
-            }
+          int v = line.toInt();
+          if (v>=0 && v<=3000) {
+            samplingInterval = v;
+            Serial.print("Intervalo actualizado: "); Serial.print(v); Serial.println(" ms");
+            break;
           }
-          Serial.println("Inválido. 0–3000 ms o 'm':");
+          Serial.println("Valor inválido. Debe ser 0–3000 o 'm':");
         }
+        showMenuLine();
       }
-      else if (c == 'm' || c == 'M') showMenuLine();
+      else if (c=='m' || c=='M') {
+        showMenuLine();
+      }
     }
-    if (!runningLF) { delay(100); return; }
+    if (!runningLineFollow) {
+      delay(100);
+      return;
+    }
 
-    // *** 3) Mantener frecuencia de muestreo fija ***
+    // 3) Muestreo fijo
     unsigned long now = millis();
-    if (now - lastTime < samplingInterval) return;
-    float dt = (now - lastTime) / 1000.0;  // Delta tiempo en s
-    lastTime = now;
+    if (now - lastSampleTime < samplingInterval) return;
+    float dt = (now - lastSampleTime)/1000.0f;
+    lastSampleTime = now;
 
-    // *** 4) Leer sensores QTR con histéresis y calcular posición ***
-    digitalWrite(ledEnable, HIGH);
+    // 4) Lectura QTR
+    digitalWrite(LED_ENABLE, HIGH);
     delayMicroseconds(100);
-    float num = 0, den = 0;
-    int rawQTR[6];
-    for (int i = 0; i < 6; i++) {
-      rawQTR[i] = analogRead(sensorPins[i]);
-      detected[i] = rawQTR[i] > THRESH_HIGH
-                  ? true
-                  : rawQTR[i] < THRESH_LOW
-                  ? false
-                  : detected[i];
-      num += detected[i] * posMM[i];
+    float num=0, den=0;
+    int raw[6];
+    for (int i=0;i<6;i++){
+      raw[i] = analogRead(SENSOR_PINS[i]);
+      detected[i] = raw[i]>THRESH_HIGH ? true : raw[i]<THRESH_LOW ? false : detected[i];
+      num += detected[i]*POS_MM[i];
       den += detected[i];
     }
-    digitalWrite(ledEnable, LOW);
+    digitalWrite(LED_ENABLE, LOW);
 
-    // *** 5) Conteo de vueltas completas ***
-    bool extI = detected[0], extD = detected[5];
-    static bool flagCruce = false;
-    if (extI && extD && !flagCruce) flagCruce = true;
-    if (!extI && !extD && flagCruce) {
-      flagCruce = false;
-      Serial.print("→ Vuelta detectada. Total: ");
-      Serial.println(++setpoint);
+    // 5) Conteo de vueltas
+    bool extL = detected[0], extR = detected[5];
+    static bool crossFlag = false;
+    if (extL && extR && !crossFlag) crossFlag = true;
+    if (!extL && !extR && crossFlag) {
+      crossFlag = false;
+      Serial.print("→ Vuelta detectada. Total: "); Serial.println(++setpoint);
     }
 
-    // *** 6) Cálculo del PID ***
-    float position   = den == 0 ? lastRawPosition : (num / den);
-    float error      = position - setpoint;
-    lastRawPosition  = position;
-    float derivative = (error - prevError) / dt;
-    float P = Kp * error;
-    float D = Kd * derivative;
-    float predictedI = integral + error * dt;
-    float rawCorr = P + Ki * predictedI + D;
-    if (!(rawCorr > PWM_MAX - PWM_BASE || rawCorr < PWM_MIN - PWM_BASE)) {
-      integral = predictedI;
+    // 6) PID
+    float position = (den==0? lastRawPosition : num/den);
+    float error    = position - setpoint;
+    lastRawPosition = position;
+
+    float P = K_P*error;
+    float D = K_D*((error-prevError)/dt);
+    float I_temp = integralSum + error*dt;
+    float rawCorr = P + K_I*I_temp + D;
+    if (rawCorr <= PWM_MAX-PWM_BASE && rawCorr >= PWM_MIN-PWM_BASE) {
+      integralSum = I_temp;
     }
-    float correction = P + Ki * integral + D;
+    float correction = P + K_I*integralSum + D;
+
     prevError = error;
+    lastErr   = error;
+    lastP     = P;
+    lastI     = K_I*integralSum;
+    lastD     = D;
+    lastCorr  = correction;
 
-    // *** 7) Cálculo de señales PWM para ruedas ***
-    int pwmL = constrain(PWM_BASE + correction, PWM_MIN, PWM_MAX);
-    int pwmR = constrain(PWM_BASE - correction, PWM_MIN, PWM_MAX);
-    if (fabs(error) <= 2.0) pwmL = pwmR = PWM_BASE;  // Zona muerta
+    // 7) PWM ruedas
+    int pwmL = constrain(PWM_BASE+correction, PWM_MIN, PWM_MAX);
+    int pwmR = constrain(PWM_BASE-correction, PWM_MIN, PWM_MAX);
+    if (fabs(error)<=2.0f) pwmL = pwmR = PWM_BASE;
 
-    // *** 8) Detección de curva ***
-    bool turning = (abs(pwmL - PWM_BASE) > 50 || abs(pwmR - PWM_BASE) > 50);
-    if (turning && !inCurve) {
-      inCurve = true;
-      curveStart = now;
-      curveDist = curveAng = 0;
+    bool turning = (abs(pwmL-PWM_BASE)>50 || abs(pwmR-PWM_BASE)>50);
+
+    // 8) Aplicar PWM
+    applyPWM(pwmL, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+    applyPWM(pwmR, PIN_BIN1, PIN_BIN2, PIN_PWMB);
+
+    // 9) Cinemática
+    float RPMmL = (pwmL/1023.0f)*MOTOR_MAX_RPM;
+    float RPMrL = RPMmL/GEAR_RATIO;
+    float wL    = RPMrL*2*PI/60.0f;
+    float vL    = wL*WHEEL_RADIUS;
+    float aL    = (vL-prev_vL)/dt; prev_vL=vL; distL+=vL*dt;
+
+    float RPMmR = (pwmR/1023.0f)*MOTOR_MAX_RPM;
+    float RPMrR = RPMmR/GEAR_RATIO;
+    float wR    = RPMrR*2*PI/60.0f;
+    float vR    = wR*WHEEL_RADIUS;
+    float aR    = (vR-prev_vR)/dt; prev_vR=vR; distR+=vR*dt;
+
+    vCar    = (vL+vR)/2.0f;
+    aCar    = (vCar-prev_vCar)/dt; prev_vCar=vCar;
+
+    // 10) Distancias y estado
+    if (turning) {
+      if (!inCurve) {
+        inCurve = true;
+        curveStartTime = now;
+        curveDistance = curveAngle = 0.0f;
+      }
+      curveDistance += vCar*dt;
+      curveAngle    += ((vR-vL)/AXLE_DISTANCE)*dt;
+      vehicleState = VehicleSt::Curve;
+    } else {
+      if (inCurve) {
+        unsigned long dtC = now - curveStartTime;
+        Serial.println("--- CURVA TERMINADA ---");
+        Serial.print("Tiempo (ms): "); Serial.println(dtC);
+        Serial.print("Dist curva (m): "); Serial.println(curveDistance,3);
+        Serial.print("Ángulo (°): ");   Serial.println(curveAngle*180.0f/PI,2);
+        curveTotalDist += curveDistance;
+        inCurve = false;
+      }
+      straightDist += vCar*dt;
+      vehicleState = VehicleSt::Straight;
     }
+    totalDist = straightDist + curveTotalDist;
 
-    // *** 9) Salida a motores A y B ***
-    applyPWM_A(pwmL);
-    applyPWM_B(pwmR);
+    // 11) Impresión unificada
+    Serial.println("------------------------------");
+    Serial.print("A→ PWM="); Serial.print(pwmL);
+    Serial.print(" RPM=");    Serial.print(RPMmL,1);
+    Serial.print(" v=");      Serial.print(vL,4);
+    Serial.print(" a=");      Serial.print(aL,4);
+    Serial.print(" d=");      Serial.println(distL,4);
 
-    // *** 10) Modelo cinemático: velocidad, aceleración y distancia ***
-    float RPMmL = (pwmL / 1023.0) * MOTOR_MAX_RPM;
-    float RPMrL = RPMmL / GEAR_RATIO;
-    float wL    = RPMrL * 2 * PI / 60.0;
-    float vL    = wL * MOTOR_RADIUS;
-    float aL    = (vL - prev_vL) / dt; prev_vL = vL; distL += vL * dt;
+    Serial.print("B→ PWM="); Serial.print(pwmR);
+    Serial.print(" RPM=");    Serial.print(RPMmR,1);
+    Serial.print(" v=");      Serial.print(vR,4);
+    Serial.print(" a=");      Serial.print(aR,4);
+    Serial.print(" d=");      Serial.println(distR,4);
 
-    float RPMmR = (pwmR / 1023.0) * MOTOR_MAX_RPM;
-    float RPMrR = RPMmR / GEAR_RATIO;
-    float wR    = RPMrR * 2 * PI / 60.0;
-    float vR    = wR * MOTOR_RADIUS;
-    float aR    = (vR - prev_vR) / dt; prev_vR = vR; distR += vR * dt;
+    Serial.print("Error=");  Serial.print(lastErr,2);
+    Serial.print("  P=");    Serial.print(lastP,2);
+    Serial.print("  I=");    Serial.print(lastI,2);
+    Serial.print("  D=");    Serial.print(lastD,2);
+    Serial.print("  Corr="); Serial.println(lastCorr,2);
 
-    vCar    = (vL + vR) / 2; 
-    aCar    = (vCar - prev_vCar) / dt; 
-    prev_vCar = vCar;
-
-    // *** 11) Acumular datos durante curva ***
-    if (inCurve) {
-      curveDist += vCar * dt;
-      curveAng  += ((vR - vL) / L) * dt;
-    }
-
-    // *** 12) Finalización de curva y reporte ***
-    if (!turning && inCurve) {
-      unsigned long dtC = now - curveStart;
-      Serial.println("--- CURVA TERMINADA ---");
-      Serial.print("Tiempo (ms): ");   Serial.println(dtC);
-      Serial.print("Dist L (m): ");    Serial.println(distL, 3);
-      Serial.print("Dist R (m): ");    Serial.println(distR, 3);
-      Serial.print("Dist carro (m): ");Serial.println(curveDist, 3);
-      Serial.print("Ángulo (°): ");    Serial.println(curveAng * 180.0 / PI, 2);
-      inCurve = false;
-    }
-
-    // *** 13) Impresión de debug por serie ***
-    Serial.print("Raw QTR: ");
-    for (int i = 0; i < 6; i++) {
-      Serial.print(rawQTR[i]);
-      Serial.print(i < 5 ? "," : "\n");
-    }
-    Serial.print("Err(mm)="); Serial.print(error, 2);
-    Serial.print(" P=");      Serial.print(P, 2);
-    Serial.print(" I=");      Serial.print(Ki * integral, 2);
-    Serial.print(" D=");      Serial.print(D, 2);
-    Serial.print(" Corr=");   Serial.print(correction, 2);
-    Serial.print(" PWM L/R=");Serial.print(pwmL); Serial.print("/");
-    Serial.println(pwmR);
-    Serial.println("--------------------------------------------------");
+    Serial.print("Vehículo v="); Serial.print(vCar,4);
+    Serial.print(" m/s  a=");    Serial.print(aCar,4);
+    Serial.println(" m/s²");
+    Serial.print("Dist tot=");    Serial.print(totalDist,3);
+    Serial.print(" m  Recta=");   Serial.print(straightDist,3);
+    Serial.print(" m  Curvas=");  Serial.print(curveTotalDist,3);
+    Serial.print(" m  Estado=");  Serial.println(vehicleState==VehicleSt::Straight?"Recta":"Curva");
   }
 
-  // — MODO PRUEBAS DE MOTORES —
-  if (mainMode == MODE_MOTOR) {
-    // Actualiza rampas de A y B
-    updateRampA();
-    updateRampB();
+  // ===== PRUEBAS DE MOTORES =====
+  if (mainMode == MainMode::MotorTest) {
+    // Actualizar rampas
+    updateRamp(opA, rampStartA, holdPhaseA, r0A, r1A, secsA, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+    updateRamp(opB, rampStartB, holdPhaseB, r0B, r1B, secsB, PIN_BIN1, PIN_BIN2, PIN_PWMB);
 
-    // 2) Selección del motor a controlar
-    if (uiState == U_SELECT_MOTOR && Serial.available()) {
+    // 1) Selección de motor...
+    if (uiState == UIState::SelectMotor && Serial.available()) {
       String s = readLine();
       if (s.equalsIgnoreCase("m")) {
-        uiState = U_MENU_MOTOR;
-        printMenuMotor();
-        return;
+        uiState = UIState::MenuMotor;
+        printMenuMotor(); return;
       }
-      if      (s.equalsIgnoreCase("A"))       motorSel = MS_A;
-      else if (s.equalsIgnoreCase("B"))       motorSel = MS_B;
-      else if (s.equalsIgnoreCase("A+B") ||
-               s.equalsIgnoreCase("BOTH"))    motorSel = MS_BOTH;
+      if      (s.equalsIgnoreCase("A"))   motorSel = MotorSel::A;
+      else if (s.equalsIgnoreCase("B"))   motorSel = MotorSel::B;
+      else if (s.equalsIgnoreCase("A+B")) motorSel = MotorSel::Both;
       else {
         Serial.print("Inválido, ingresa A, B, A+B o 'm': ");
         return;
       }
       Serial.print(" >> Ahora: ");
-      Serial.println(motorSel == MS_A  ? "A" :
-                     motorSel == MS_B  ? "B" : "A+B");
-      uiState = U_MENU_MOTOR;
-      printMenuMotor();
-      return;
+      Serial.println(motorSel==MotorSel::A?"A":motorSel==MotorSel::B?"B":"A+B");
+      uiState = UIState::MenuMotor;
+      printMenuMotor(); return;
     }
 
-    // 3) Menú principal de motores
-    if (uiState == U_MENU_MOTOR && Serial.available()) {
+    // 2) Menú principal de motores
+    if (uiState == UIState::MenuMotor && Serial.available()) {
       char c = readLine().charAt(0);
       switch (c) {
         case '1':
-          uiState = U_MANUAL;
+          uiState = UIState::Manual;
           Serial.print("\n→ MODO MANUAL (m para menú)\n  Ingresa PWM (200–1010): ");
           break;
         case '2':
-          uiState = U_DISPLAY;
+          uiState = UIState::Display;
           Serial.println("\n--- VISUALIZACIÓN (q o m sale) ---");
           lastDispA = lastDispB = millis();
-          lastVelA = lastVelB = 0;
-          distA_m = distB_m = 0;
+          lastVelA = lastVelB = 0.0f;
+          distA_m = distB_m = 0.0f;
           break;
         case '3':
-          uiState = U_RAMP;
-          Serial.println("\n→ Configurar Rampa (m para menú en cualquier paso)");
-          // Configuración de rampa para A y B...
-          // (llamada a readInt y setup de rampa)
+          uiState = UIState::Ramp;
+          Serial.println("\n→ Configurar Rampa (m para menú)");
+          // Pedir r0A,r1A,secsA...
           Serial.println("\n--- Rampas iniciadas (x detiene) ---");
           break;
         case '4':
-          uiState = U_SELECT_MOTOR;
+          uiState = UIState::SelectMotor;
           Serial.print("\nSelecciona motor (A/B/A+B, m para menú): ");
           break;
         case '0':
-          opA = opB = OP_STOP;
-          applyPWM_A(0); applyPWM_B(0);
+          opA = opB = RampState::Stop;
+          applyPWM(0, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+          applyPWM(0, PIN_BIN1, PIN_BIN2, PIN_PWMB);
           Serial.println("→ Todos los motores detenidos");
           printMenuMotor();
           break;
         case 'm':
           printMenuMotor();
           break;
-        default:
-          Serial.println("Opción inválida");
-          printMenuMotor();
       }
     }
 
-    // 4) MODO MANUAL: lectura de PWM directo
-    if (uiState == U_MANUAL && Serial.available()) {
+    // 3) MODO MANUAL
+    if (uiState == UIState::Manual && Serial.available()) {
       String s = readLine();
       if (s.equalsIgnoreCase("m")) {
-        uiState = U_MENU_MOTOR;
-        printMenuMotor();
-        return;
+        uiState = UIState::MenuMotor;
+        printMenuMotor(); return;
       }
       int p = s.toInt();
       if (p < PWM_MIN || p > PWM_MAX) {
-        Serial.print("  → rango[200–1010], reingresa o 'm': ");
+        Serial.print(" → rango[200–1010], reingresa o 'm': ");
         return;
       }
-      if (motorSel == MS_A || motorSel == MS_BOTH) {
-        applyPWM_A(p); opA = OP_STOP;
+      if (motorSel==MotorSel::A || motorSel==MotorSel::Both) {
+        applyPWM(p, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+        opA = RampState::Stop;
       }
-      if (motorSel == MS_B || motorSel == MS_BOTH) {
-        applyPWM_B(p); opB = OP_STOP;
+      if (motorSel==MotorSel::B || motorSel==MotorSel::Both) {
+        applyPWM(p, PIN_BIN1, PIN_BIN2, PIN_PWMB);
+        opB = RampState::Stop;
       }
-      uiState = U_MENU_MOTOR;
+      uiState = UIState::MenuMotor;
       printMenuMotor();
     }
 
-    // 5) MODO DISPLAY: mostrar datos periódicos de A/B
-    if (uiState == U_DISPLAY) {
+    // 4) MODO DISPLAY
+    if (uiState == UIState::Display) {
       if (Serial.available()) {
         char c = readLine().charAt(0);
-        if (c == 'q' || c == 'm') {
-          uiState = U_MENU_MOTOR;
-          printMenuMotor();
-          return;
+        if (c=='q'||c=='m') {
+          applyPWM(0, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+          applyPWM(0, PIN_BIN1, PIN_BIN2, PIN_PWMB);
+          Serial.println("=== Test finalizado ===");
+          uiState = UIState::MenuMotor;
+          printMenuMotor(); return;
         }
       }
-      if (motorSel == MS_A || motorSel == MS_BOTH) doDisplayA();
-      if (motorSel == MS_B || motorSel == MS_BOTH) doDisplayB();
+      if (motorSel==MotorSel::A || motorSel==MotorSel::Both) doDisplayA();
+      if (motorSel==MotorSel::B || motorSel==MotorSel::Both) doDisplayB();
+      displayKinematics();
+      Serial.print("Error=");  Serial.print(lastErr,2);
+      Serial.print("  P=");    Serial.print(lastP,2);
+      Serial.print("  I=");    Serial.print(lastI,2);
+      Serial.print("  D=");    Serial.print(lastD,2);
+      Serial.print("  Corr="); Serial.println(lastCorr,2);
+      Serial.println("------------------------------");
     }
 
-    // 6) DETENER RAMPAS con 'x'
+    // 5) Detener rampas con 'x'
     if (Serial.available()) {
       char c = readLine().charAt(0);
-      if (c == 'x') {
-        opA = opB = OP_STOP;
-        applyPWM_A(0); applyPWM_B(0);
+      if (c=='x') {
+        opA = opB = RampState::Stop;
+        applyPWM(0, PIN_AIN1, PIN_AIN2, PIN_PWMA);
+        applyPWM(0, PIN_BIN1, PIN_BIN2, PIN_PWMB);
         Serial.println("\n--- Rampas detenidas por 'x' ---");
-        uiState = U_MENU_MOTOR;
+        uiState = UIState::MenuMotor;
         printMenuMotor();
       }
     }
-  }
+  } // fin MotorTest
 }
 
-// ====== DEFINICIONES DE FUNCIONES ======
+// ======= FUNCIONES AUXILIARES =======
 
+/**
+ * @brief Mostrar menú principal
+ */
 void showSelectMain() {
-  // Imprime el menú principal de selección de modo
   Serial.println(F("\n=== MENÚ PRINCIPAL ==="));
   Serial.println(F("1: Seguidor de línea"));
   Serial.println(F("2: Pruebas de motores"));
   Serial.print  (F("Seleccione: "));
 }
 
+/**
+ * @brief Mostrar menú del seguidor de línea
+ */
 void showMenuLine() {
-  // Imprime el menú de opciones para seguidor de línea
   Serial.println(F("\n===== MENÚ LÍNEA ====="));
   Serial.println(F("1: Iniciar lectura"));
   Serial.println(F("2: Parar lectura"));
@@ -485,24 +511,27 @@ void showMenuLine() {
   Serial.println(F("======================"));
 }
 
+/**
+ * @brief Calibración inicial de setpoint mediante LDR
+ * @return Posición promedio (mm)
+ */
 float calibrateSetpoint() {
-  // Realiza Ncal lecturas para calibrar la posición objetivo (setpoint)
   const int Ncal = 50;
   float sumPos = 0, lastPos = lastRawPosition;
-  for (int k = 0; k < Ncal; k++) {
-    digitalWrite(ledEnable, HIGH);
+  for (int i = 0; i < Ncal; i++) {
+    digitalWrite(LED_ENABLE, HIGH);
     delayMicroseconds(100);
-    float num = 0, den = 0;
-    for (int i = 0; i < 6; i++) {
-      int Lval = analogRead(sensorPins[i]);
-      detected[i] = (Lval > THRESH_HIGH) ? true
-                    : (Lval < THRESH_LOW)  ? false
-                                           : detected[i];
-      num += detected[i] * posMM[i];
-      den += detected[i];
+    float num=0, den=0;
+    for (int j=0; j<6; j++){
+      int val = analogRead(SENSOR_PINS[j]);
+      detected[j] = val>THRESH_HIGH ? true
+                     : val<THRESH_LOW ? false
+                                     : detected[j];
+      num += detected[j]*POS_MM[j];
+      den += detected[j];
     }
-    digitalWrite(ledEnable, LOW);
-    float pos = (den == 0) ? lastPos : num / den;
+    digitalWrite(LED_ENABLE, LOW);
+    float pos = (den==0)? lastPos : num/den;
     sumPos += pos;
     lastPos = pos;
     lastRawPosition = pos;
@@ -511,43 +540,19 @@ float calibrateSetpoint() {
   return sumPos / Ncal;
 }
 
+/**
+ * @brief Leer línea completa desde Serial
+ */
 String readLine() {
-  // Lee y recorta una línea desde Serial
   String s = Serial.readStringUntil('\n');
   s.trim();
   return s;
 }
 
-int readInt(const char* prompt, int minV, int maxV) {
-  // Lee y valida un entero entre minV y maxV o permite salir con 'm'
-  int v = minV - 1;
-  Serial.print(prompt);
-  while (v < minV || v > maxV) {
-    while (!Serial.available());
-    String s = readLine();
-    if (s.equalsIgnoreCase("m")) {
-      uiState = U_MENU_MOTOR;
-      printMenuMotor();
-      return -1;
-    }
-    if (s.length() == 0) {
-      Serial.print("  → vacío, reingresa o 'm': ");
-      continue;
-    }
-    v = s.toInt();
-    if (v < minV || v > maxV) {
-      Serial.print("  → fuera de rango [");
-      Serial.print(minV); Serial.print("-"); Serial.print(maxV);
-      Serial.print("], reingresa o 'm': ");
-    }
-  }
-  Serial.print("  >> Aceptado: ");
-  Serial.println(v);
-  return v;
-}
-
+/**
+ * @brief Mostrar menú de pruebas de motores
+ */
 void printMenuMotor() {
-  // Imprime el menú de opciones para pruebas de motor
   Serial.println(F("\n=== MENÚ MOTORES ==="));
   Serial.println(F("1: PWM manual"));
   Serial.println(F("2: Visualizar datos"));
@@ -558,105 +563,102 @@ void printMenuMotor() {
   Serial.print  (F("Opción: "));
 }
 
-void applyPWM_A(int p) {
-  // Aplica PWM al motor A forzando valor mínimo
-  if (p > 0 && p < PWM_MIN) p = PWM_MIN;
-  pwmA = p;
-  digitalWrite(PIN_AIN1, p > 0 ? HIGH : LOW);
-  digitalWrite(PIN_AIN2, LOW);
-  analogWrite(PIN_PWMA, map(p, 0, PWM_MAX, 0, 255));
+/**
+ * @brief Aplicar PWM a un motor con TB6612FNG
+ */
+void applyPWM(int pwm, int pinIn1, int pinIn2, int pinPw) {
+  if (pwm>0 && pwm<PWM_MIN) pwm = PWM_MIN;
+  analogWrite(pinPw, map(pwm,0,PWM_MAX,0,255));
+  digitalWrite(pinIn1, pwm>0?HIGH:LOW);
+  digitalWrite(pinIn2, LOW);
 }
 
-void applyPWM_B(int p) {
-  // Aplica PWM al motor B forzando valor mínimo
-  if (p > 0 && p < PWM_MIN) p = PWM_MIN;
-  pwmB = p;
-  digitalWrite(PIN_BIN1, p > 0 ? HIGH : LOW);
-  digitalWrite(PIN_BIN2, LOW);
-  analogWrite(PIN_PWMB, map(p, 0, PWM_MAX, 0, 255));
-}
-
-void updateRampA() {
-  // Actualiza el estado de rampa progresiva para motor A
-  if (opA != OP_RAMP) return;
+/**
+ * @brief Actualizar rampa progresiva de un motor
+ */
+void updateRamp(RampState &state, unsigned long &startTime,
+                bool &hold, int r0, int r1, int secs,
+                int pinIn1, int pinIn2, int pinPw)
+{
+  if (state != RampState::Ramp) return;
   unsigned long now = millis();
-  if (!holdPhaseA) {
-    if (now < rampStartA + secsA * 1000UL) {
-      float frac = float(now - rampStartA) / (secsA * 1000.0);
-      int tr = r0A + (r1A - r0A) * frac;
-      applyPWM_A(round(tr * (float)PWM_MAX / MOTOR_MAX_RPM));
+  if (!hold) {
+    if (now < startTime + secs*1000UL) {
+      float frac = (now - startTime) / float(secs*1000UL);
+      int tr = r0 + (r1 - r0)*frac;
+      applyPWM(round(tr*(float)PWM_MAX/MOTOR_MAX_RPM), pinIn1, pinIn2, pinPw);
     } else {
-      holdPhaseA = true;
-      rampStartA = now;
+      hold = true;
+      startTime = now;
     }
   } else {
-    if (now < rampStartA + 2000UL) {
-      applyPWM_A(round(r1A * (float)PWM_MAX / MOTOR_MAX_RPM));
+    if (now < startTime + 2000UL) {
+      applyPWM(round(r1*(float)PWM_MAX/MOTOR_MAX_RPM), pinIn1, pinIn2, pinPw);
     } else {
-      holdPhaseA = false;
-      rampStartA = now;
+      hold = false;
+      startTime = now;
     }
   }
 }
 
-void updateRampB() {
-  // Actualiza el estado de rampa progresiva para motor B
-  if (opB != OP_RAMP) return;
-  unsigned long now = millis();
-  if (!holdPhaseB) {
-    if (now < rampStartB + secsB * 1000UL) {
-      float frac = float(now - rampStartB) / (secsB * 1000.0);
-      int tr = r0B + (r1B - r0B) * frac;
-      applyPWM_B(round(tr * (float)PWM_MAX / MOTOR_MAX_RPM));
-    } else {
-      holdPhaseB = true;
-      rampStartB = now;
-    }
-  } else {
-    if (now < rampStartB + 2000UL) {
-      applyPWM_B(round(r1B * (float)PWM_MAX / MOTOR_MAX_RPM));
-    } else {
-      holdPhaseB = false;
-      rampStartB = now;
-    }
-  }
-}
-
+/**
+ * @brief Mostrar datos de motor A (formato fijo)
+ */
 void doDisplayA() {
-  // Muestra datos periódicos de motor A: PWM, RPM, v, a, distancia
   unsigned long now = millis();
-  if (now - lastDispA < 500) return;
-  float dt = (now - lastDispA) / 1000.0;
+  if (now - lastDispA < 1000) return;
+  float dt = (now - lastDispA) / 1000.0f;
   lastDispA = now;
-  float rpmv = (float)pwmA / PWM_MAX * MOTOR_MAX_RPM / GEAR_RATIO;
-  float rad  = rpmv * 2 * PI / 60.0;
-  float v    = rad * MOTOR_RADIUS;
-  float a    = (v - lastVelA) / dt;
-  distA_m   += v * dt;
-  lastVelA  = v;
+
+  float rpmv = float(pwmA)/PWM_MAX * MOTOR_MAX_RPM / GEAR_RATIO;
+  float rad  = rpmv * 2*PI / 60.0f;
+  float v    = rad * WHEEL_RADIUS;
+  float a    = (v - lastVelA)/dt;
+  distA_m   += v*dt;
+  lastVelA   = v;
+
   Serial.print("A→ PWM="); Serial.print(pwmA);
-  Serial.print(" RPM=");    Serial.print(rpmv, 1);
-  Serial.print(" v=");      Serial.print(v, 4);
-  Serial.print(" a=");      Serial.print(a, 4);
-  Serial.print(" d=");      Serial.println(distA_m, 4);
+  Serial.print(" RPM=");     Serial.print(rpmv,1);
+  Serial.print(" v=");       Serial.print(v,4);
+  Serial.print(" a=");       Serial.print(a,4);
+  Serial.print(" d=");       Serial.println(distA_m,4);
 }
 
+/**
+ * @brief Mostrar datos de motor B (formato fijo)
+ */
 void doDisplayB() {
-  // Muestra datos periódicos de motor B: PWM, RPM, v, a, distancia
   unsigned long now = millis();
-  if (now - lastDispB < 500) return;
-  float dt = (now - lastDispB) / 1000.0;
+  if (now - lastDispB < 1000) return;
+  float dt = (now - lastDispB) / 1000.0f;
   lastDispB = now;
-  float rpmv = (float)pwmB / PWM_MAX * MOTOR_MAX_RPM / GEAR_RATIO;
-  float rad  = rpmv * 2 * PI / 60.0;
-  float v    = rad * MOTOR_RADIUS;
-  float a    = (v - lastVelB) / dt;
-  distB_m   += v * dt;
-  lastVelB  = v;
+
+  float rpmv = float(pwmB)/PWM_MAX * MOTOR_MAX_RPM / GEAR_RATIO;
+  float rad  = rpmv * 2*PI / 60.0f;
+  float v    = rad * WHEEL_RADIUS;
+  float a    = (v - lastVelB)/dt;
+  distB_m   += v*dt;
+  lastVelB   = v;
+
   Serial.print("B→ PWM="); Serial.print(pwmB);
-  Serial.print(" RPM=");    Serial.print(rpmv, 1);
-  Serial.print(" v=");      Serial.print(v, 4);
-  Serial.print(" a=");      Serial.print(a, 4);
-  Serial.print(" d=");      Serial.println(distB_m, 4);
+  Serial.print(" RPM=");     Serial.print(rpmv,1);
+  Serial.print(" v=");       Serial.print(v,4);
+  Serial.print(" a=");       Serial.print(a,4);
+  Serial.print(" d=");       Serial.println(distB_m,4);
 }
 
+/**
+ * @brief Mostrar estado cinemático del vehículo
+ */
+void displayKinematics() {
+  Serial.print("Vehículo v="); Serial.print(vCar,4);
+  Serial.print(" m/s  a=");    Serial.print(aCar,4);
+  Serial.println(" m/s²");
+
+  Serial.print("Dist total (m): ");   Serial.println(totalDist,3);
+  Serial.print("Dist recta (m): ");   Serial.println(straightDist,3);
+  Serial.print("Dist curvas (m): ");  Serial.println(curveTotalDist,3);
+
+  Serial.print("Estado: ");
+  Serial.println(vehicleState==VehicleSt::Straight ? "Linea recta" : "Curva");
+}
