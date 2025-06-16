@@ -32,7 +32,7 @@ Descarga los archivos y haz ajuste necesario en el COM y la disposicion de los p
 El uso de cada archivo se menciona en el titulo para mayor enfasis
 
 ## 📂 Estructura del Proyecto
-
+```plain
 Carro Seguidor de linea/
 ├── Pruebas/
 │   ├── MonitorMotores.ino
@@ -51,7 +51,7 @@ Carro Seguidor de linea/
 ├── LICENSE.md
 ├── Pambacode_CSL.ino
 └── Readme.md
-
+```
 ## 🧑‍💻 Autores
 
 * **César Arturo** – CesarDAlvin
