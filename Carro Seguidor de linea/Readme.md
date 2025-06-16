@@ -33,13 +33,25 @@ El uso de cada archivo se menciona en el titulo para mayor enfasis
 
 ## 📂 Estructura del Proyecto
 
-```plain
-SensorArrayLogger/
-├── README.md           # Documentación del proyecto
-├── SensorArrayLogger.ino # Código fuente de Arduino
-├── analizar_datos.py   # Ejemplo de script Python para procesar serial
-└── LICENSE.md          # Licencia del proyecto
-```
+Carro Seguidor de linea/
+├── Pruebas/
+│   ├── MonitorMotores.ino
+│   ├── PruebaMonitoreoPID_ModCin.ino
+│   ├── Prueba_General_CSL.ino
+│   ├── Prueba_Motor_Ind.ino
+│   ├── Prueba_QTR_Ind.ino
+│   └── Prueba_sensor_QTR.ino
+├── Recursos Python/
+│   ├── Analizador_RangColor.py
+│   ├── Generador de registros QTR.py
+│   ├── Graficacion de modelo de desplazamiento.py
+│   ├── Interfaz de control de motores.py
+│   ├── Pre-PID simulacion.py
+│   └── Readme.md
+├── LICENSE.md
+├── Pambacode_CSL.ino
+└── Readme.md
+
 ## 🧑‍💻 Autores
 
 * **César Arturo** – CesarDAlvin
